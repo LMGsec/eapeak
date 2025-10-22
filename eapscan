@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/home/ghost/.local/share/pipx/venvs/eapeak/bin/python
 # -*- coding: utf-8 -*-
 #
 #  eapscan
@@ -44,6 +44,7 @@ from eapeak.parse import EapeakParsingEngine
 from eapeak.scapylayers.l2 import eap_types as EAP_TYPES
 from eapeak.common import __version__
 from ipfunc import sanitizeMAC
+from scapy.layers.dot11 import Dot11, RadioTap
 
 # external imports
 from scapy.config import conf

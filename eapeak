@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/home/ghost/.local/share/pipx/venvs/eapeak/bin/python
 # -*- coding: utf-8 -*-
 #
 #  eapeak
@@ -39,16 +39,14 @@ import sys
 import _thread
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'lib'))
-#from eapeak.parse import CursesEapeakParsingEngine  # pylint: disable=no-name-in-module
-#from eapeak.parse import EapeakParsingEngine  # pylint: disable=no-name-in-module
+from eapeak.parse import CursesEapeakParsingEngine
+from eapeak.parse import EapeakParsingEngine
+from eapeak.common import __version__
 from eapeak.common import __version__
 
-try:
-	from M2Crypto import X509
-except ImportError:
-	print('Error: Missing M2Crypto, Please Install The M2Crypto Libraries')
-	print('Error: Now Exiting...')
-	sys.exit(1)
+from cryptography import x509
+
+from scapy.layers.dot11 import Dot11, RadioTap
 
 from scapy.config import conf
 from scapy.sendrecv import sniff
@@ -266,8 +264,8 @@ def main():
 	intro += '*' * len(intro0) + '****\n'
 	print(intro)
 	del intro, intro0, intro1
-	networks = eapeak_parser.KnownNetworks.keys()
-	networks.sort()
+	networks = sorted(eapeak_parser.KnownNetworks.keys())
+	#networks.sort()
 	for network in networks:
 		print(eapeak_parser.KnownNetworks[network].show())
 		print('')

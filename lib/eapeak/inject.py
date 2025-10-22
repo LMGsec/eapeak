@@ -30,7 +30,7 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-import Queue
+import queue
 from random import randint
 from struct import pack, unpack
 import threading
@@ -38,12 +38,15 @@ import time
 
 # external imports
 from scapy.layers.dot11 import RadioTap, Dot11, Dot11Beacon, Dot11Elt, Dot11Auth, Dot11AssoReq, Dot11AssoResp, Dot11ProbeReq, Dot11Disas, Dot11QoS, Dot11ProbeResp
-from scapy.layers.l2 import LLC, SNAP, EAPOL
 from scapy.sendrecv import sniff, sendp
+
+from scapy.layers.eap import EAP, EAPOL
+from scapy.layers.dot11 import Dot11, RadioTap
+from scapy.layers.l2 import Ether
 
 # project imports
 from eapeak.common import get_bssid, get_source, get_destination, __version__
-from eapeak.parse import parse_rsn_data, build_rsn_data
+from eapeak.common import parse_rsn_data, build_rsn_data
 from eapeak.scapylayers.l2 import LEAP, PEAP, EAP  # pylint: disable=unused-import
 from ipfunc import getHwAddr
 
@@ -215,7 +218,7 @@ class ClientListener(threading.Thread):
 			bssid = getHwAddr(interface)
 		self.bssid = bssid.lower()
 		self.lastpacket = None
-		self.client_queue = Queue.Queue(self.backlog)
+		self.client_queue = queue.Queue(self.backlog)
 		self.channel = "\x06"
 		self.sequence = randint(1200, 2000)
 		self.__shutdown__ = False

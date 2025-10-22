@@ -34,11 +34,14 @@ from base64 import standard_b64encode as b64encode
 from xml.sax.saxutils import escape as XMLEscape
 
 # external imports
-from M2Crypto import X509
+from cryptography import x509
 
-# project imports
-from eapeak.scapylayers.l2 import eap_types as EAP_TYPES
 from eapeak.common import EXPANDED_EAP_VENDOR_IDS, __version__
+
+from scapy.layers.eap import EAP, EAPOL
+from scapy.layers.dot11 import Dot11, Dot11Elt, Dot11Beacon
+from scapy.layers.l2 import Ether
+from eapeak.scapylayers.l2 import eap_types as EAP_TYPES
 
 EAP_TYPES[0] = 'NONE'
 
@@ -108,20 +111,20 @@ class WirelessNetwork:
 		"""
 		Add an associated Client Object to the internal list.
 		"""
-		if not clientobj.mac in self.clients.keys():
+		if not clientobj.mac in list(self.clients.keys()):
 			self.clients[clientobj.mac] = clientobj
 
 	def has_client(self, client_mac):
 		"""
 		Checks that a client has been seen with this network.
 		"""
-		return client_mac in self.clients.keys()
+		return client_mac in list(self.clients.keys())
 
 	def get_client(self, client_mac):
 		"""
 		Returns a client associated with the give MAC address.
 		"""
-		if client_mac in self.clients.keys():
+		if client_mac in list(self.clients.keys()):
 			return self.clients[client_mac]
 		else:
 			return None
@@ -138,21 +141,21 @@ class WirelessNetwork:
 		if self.eapTypes:
 			output += tab + 'EAP Types:\n'
 			for eapType in self.eapTypes:
-				if eapType in EAP_TYPES.keys():
+				if eapType in list(EAP_TYPES.keys()):
 					output += (tab * 2) + EAP_TYPES[eapType] + '\n'
 				else:
 					output += (tab * 2) + 'EAP Type: ' + str(eapType) + '\n'
 		if self.expandedVendorIDs:
 			output += tab + 'Expanded EAP Vendor IDs:\n'
 			for vendorID in self.expandedVendorIDs:
-				if vendorID in EXPANDED_EAP_VENDOR_IDS.keys():
+				if vendorID in list(EXPANDED_EAP_VENDOR_IDS.keys()):
 					output += (tab * 2) + EXPANDED_EAP_VENDOR_IDS[vendorID] + '\n'
 				else:
 					output += (tab * 2) + 'Vendor ID: ' + str(vendorID) + '\n'
 		if self.wpsData:
 			output_control = True
 			for piece in ['Manufacturer', 'Model Name', 'Model Number', 'Device Name']:
-				if self.wpsData.has_key(piece):
+				if piece in self.wpsData:
 					if output_control:
 						output += tab + 'WPS Information:\n'
 						output_control = False
@@ -160,7 +163,7 @@ class WirelessNetwork:
 		if self.clients:
 			output += tab + 'Client Data:\n'
 			i = 1
-			for client in self.clients.values():
+			for client in list(self.clients.values()):
 				output += (tab * 2) + 'Client #' + str(i) + '\n' + client.show(2) + '\n\n'
 				i += 1
 		if self.x509certs:
@@ -211,15 +214,15 @@ class WirelessNetwork:
 		if self.wpsData:
 			wps = ElementTree.SubElement(root, 'wps-data')
 			for info in ['manufacturer', 'model name', 'model number', 'device name']:
-				if self.wpsData.has_key(info):
+				if info in self.wpsData:
 					tmp = ElementTree.SubElement(wps, info.replace(' ', '-'))
 					tmp.text = self.wpsData[info]  # pylint: disable=unsubscriptable-object
 			for info in ['uuid', 'registrar nonce', 'enrollee nonce']:  # Values that should be base64 encoded
-				if self.wpsData.has_key(info):
+				if info in self.wpsData:
 					tmp = ElementTree.SubElement(wps, info.replace(' ', '-'))
 					tmp.set('encoding', 'base64')
 					tmp.text = b64encode(self.wpsData[info])  # pylint: disable=unsubscriptable-object
-		for client in self.clients.values():
+		for client in list(self.clients.values()):
 			root.append(client.get_xml())
 		for cert in self.x509certs:
 			tmp = ElementTree.SubElement(root, 'certificate')

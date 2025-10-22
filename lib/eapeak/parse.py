@@ -40,23 +40,31 @@ import time
 from xml.dom import minidom
 from xml.etree import ElementTree
 
+
+import struct
+from scapy.utils import PcapReader
+from scapy.error import Scapy_Exception
+
 try:
 	import curses
 	CURSES_CAPABLE = True
 except ImportError:
 	CURSES_CAPABLE = False
 
-from M2Crypto import X509
-
-from scapy.utils import PcapReader
+from cryptography import x509
+from scapy.all import PcapReader
 import scapy.packet  # pylint: disable=unused-import
-import scapy.layers.all  # pylint: disable=unused-import
-from scapy.layers.l2 import EAP
-from eapeak.scapylayers.l2 import eap_types as EAP_TYPES
-
-from eapeak.common import get_bssid, get_source, get_destination, EXPANDED_EAP_VENDOR_IDS, __version__
+from scapy.layers.eap import EAP, EAPOL
+from scapy.layers.dot11 import Dot11, Dot11Elt, Dot11Beacon, RadioTap
+from scapy.layers.l2 import Ether, LLC
 import eapeak.networks
 import eapeak.clients
+from eapeak.common import get_bssid, get_source, get_destination, check_interface, set_interface_channel
+from eapeak.inject import WirelessStateMachine, WirelessStateMachineEAP
+from eapeak.networks import WirelessNetwork
+from eapeak.scapylayers.l2 import eap_types as EAP_TYPES
+from eapeak.common import __version__
+from eapeak.common import parse_rsn_data, build_rsn_data
 
 # Statics
 UNKNOWN_SSID_NAME = 'UNKNOWN_SSID'
@@ -85,7 +93,7 @@ def merge_wireless_networks(source, destination):
 	for bssid in source.bssids:
 		destination.add_BSSID(bssid)
 
-	for clientobj in source.clients.values():
+	for clientobj in list(source.clients.values()):
 		destination.add_client(clientobj)
 
 	for eaptype in source.eapTypes:
@@ -156,7 +164,7 @@ class wpsDataHolder(dict):
 	def keys(self):
 		keys = dict.keys(self)
 		new_keys = []
-		for key, value in self.__h_to_c__.items():
+		for key, value in list(self.__h_to_c__.items()):
 			if value in keys:
 				new_keys.append(key)
 		keys.extend(new_keys)
@@ -182,46 +190,6 @@ def parse_wps_data(wpsdata, trimStrings=True):
 				continue
 		data[_type] = value
 	return data
-
-def parse_rsn_data(rsndata):
-	"""
-	Take raw RSN data and return a dictionary representing it's values
-	Tag Number and Tag length are removed
-	"""
-	rsn = {}
-	rsn['version'] = struct.unpack('<H', rsndata[:2])[0]
-	rsn['grp_cipher'] = rsndata[2:6]
-
-	pair_ciphers = []
-	nbr_pair_cipher = struct.unpack('<H', rsndata[6:8])[0]
-	rsndata = rsndata[8:]
-	while nbr_pair_cipher and len(rsndata):
-		pair_ciphers.append(rsndata[:4])
-		rsndata = rsndata[4:]
-		nbr_pair_cipher -= 1
-	rsn['pair_ciphers'] = pair_ciphers
-
-	auth_key_mgmt = []
-	nbr_auth_key_mgmt = struct.unpack('<H', rsndata[:2])[0]
-	rsndata = rsndata[2:]
-	while nbr_auth_key_mgmt and len(rsndata):
-		auth_key_mgmt.append(rsndata[:4])
-		rsndata = rsndata[4:]
-		nbr_auth_key_mgmt -= 1
-	rsn['auth_key_mgmts'] = auth_key_mgmt
-	rsn['capabilities'] = rsndata
-	return rsn
-
-def build_rsn_data(rsn):
-	version = rsn.get('version') or 1
-	rsndata = struct.pack('<H', version)
-	rsndata += rsn['grp_cipher']
-	rsndata += struct.pack('<H', 1)
-	rsndata += rsn['pair_ciphers'][0]
-	rsndata += struct.pack('<H', 1)
-	rsndata += rsn['auth_key_mgmts'][0]
-	rsndata += rsn.get('capabilities') or '\x00\x00'
-	return rsndata
 
 class EapeakParsingEngine:
 	"""
@@ -295,16 +263,20 @@ class EapeakParsingEngine:
 					i += 1
 				i -= 1
 				if not quite:
-					sys.stdout.write((' ' * len('Parsing File: ' + pcap + ' Packets Done: ' + str(i))) + '\r')
+					sys.stdout.write((' ' * len('Parsing File: ' + pcap + ' of Packets Done: ' + str(i))) + '\r')
 					sys.stdout.write('Done With File: ' + pcap + ' Read ' + str(i) + ' Packets\n')
 					sys.stdout.flush()
 			except KeyboardInterrupt:
 				if not quite:
 					sys.stdout.write("Skipping File {0} Due To Ctl+C\n".format(pcap))
 					sys.stdout.flush()
-			except:  # pylint: disable=bare-except
+			except EOFError:
+				pass  # File truncated - already got all readable packets
+			except Exception as e:  # pylint: disable=bare-except
 				if not quite:
-					sys.stdout.write("Skipping File {0} Due To Scapy Exception\n".format(pcap))
+					print(f"Skipping File Due To Scapy Exception: {type(e).__name__}: {e}")
+					import traceback
+					traceback.print_exc()
 					sys.stdout.flush()
 			self.fragment_buffer = {}
 			pcapr.close()
@@ -458,7 +430,7 @@ class EapeakParsingEngine:
 		eapeakXML.set('eapeak-version', __version__)
 		eapeakXML.append(ElementTree.Comment(' Summary: Found ' + str(len(self.KnownNetworks)) + ' Network(s) '))
 		eapeakXML.append(ElementTree.Comment(datetime.datetime.now().strftime(' Created %A %m/%d/%Y %H:%M:%S ')))
-		networks = self.KnownNetworks.keys()
+		networks = list(self.KnownNetworks.keys())
 		if not networks:
 			return
 		networks.sort()
@@ -481,7 +453,12 @@ class EapeakParsingEngine:
 					break
 				if not bssid:
 					return
-				ssid = ''.join([c for c in tmp.fields['info'] if (ord(c) > 31 or ord(c) == 9) and ord(c) < 128])
+                # Python 3: handle bytes (gives ints) and strings (gives chars)
+				info_field = tmp.fields['info']
+				if isinstance(info_field, bytes):
+					ssid = ''.join([chr(c) for c in info_field if (c > 31 or c == 9) and c < 128])
+				else:
+					ssid = ''.join([c for c in info_field if (ord(c) > 31 or ord(c) == 9) and ord(c) < 128])
 				if self.targetBSSIDs:
 					if not self.targetSSIDs:
 						self.targetSSIDs = []
@@ -766,7 +743,7 @@ class CursesEapeakParsingEngine(EapeakParsingEngine):
 					self.screen.refresh()
 					self.curses_lower_refresh_counter = CURSES_LOWER_REFRESH_FREQUENCY  # Trigger a redraw by adjusting the counter
 				elif 0 <= (self.user_marker_pos - 1 + self.curses_row_offset) < len(self.KnownNetworks):
-					self.curses_detailed = self.KnownNetworks.keys()[(self.user_marker_pos - 1) + self.curses_row_offset_store]
+					self.curses_detailed = list(self.KnownNetworks.keys())[(self.user_marker_pos - 1) + self.curses_row_offset_store]
 					self.screen.refresh()
 					self.curses_lower_refresh_counter = CURSES_LOWER_REFRESH_FREQUENCY  # Trigger a redraw by adjusting the counter
 			elif c in [113, 81]:  # 113 = ord('q')
@@ -801,11 +778,11 @@ class CursesEapeakParsingEngine(EapeakParsingEngine):
 				if self.curses_detailed in self.KnownNetworks:
 					network = self.KnownNetworks[self.curses_detailed]
 				else:
-					network = self.KnownNetworks.values()[self.user_marker_pos - 1 + self.curses_row_offset]
+					network = list(self.KnownNetworks.values())[self.user_marker_pos - 1 + self.curses_row_offset]
 				filename = network.ssid + '_users.txt'
 				if network.clients:
-					for client in network.clients.values():
-						usernames.extend(client.identities.keys())
+					for client in list(network.clients.values()):
+						usernames.extend(list(client.identities.keys()))
 					try:
 						filehandle = open(filename, 'w')
 						filehandle.write("\n".join(usernames) + '\n')
@@ -859,7 +836,7 @@ class CursesEapeakParsingEngine(EapeakParsingEngine):
 				continue
 
 			messages = []
-			ssids = self.KnownNetworks.keys()
+			ssids = list(self.KnownNetworks.keys())
 			if self.curses_detailed and self.curses_detailed in self.KnownNetworks:
 				network = self.KnownNetworks[self.curses_detailed]
 				messages.append((TAB_LENGTH, 'SSID: ' + network.ssid))
@@ -915,7 +892,7 @@ class CursesEapeakParsingEngine(EapeakParsingEngine):
 		if network.wpsData:
 			the_cheese_stands_alone = True
 			for piece in ['Manufacturer', 'Model Name', 'Model Number', 'Device Name']:
-				if network.wpsData.has_key(piece):
+				if piece in network.wpsData:
 					if the_cheese_stands_alone:
 						messages.append((TAB_LENGTH, 'WPS Information:'))
 						the_cheese_stands_alone = False
@@ -925,7 +902,7 @@ class CursesEapeakParsingEngine(EapeakParsingEngine):
 			del the_cheese_stands_alone, piece # pylint: disable=undefined-loop-variable
 		if network.clients:
 			messages.append((TAB_LENGTH, 'Clients:         '))
-			clients = network.clients.values()
+			clients = list(network.clients.values())
 			for i in range(0, len(clients)):
 				client = clients[i]
 				messages.append((TAB_DEPTH_2, 'Client ' + str(i + 1) + ') MAC: ' + client.mac))
@@ -935,7 +912,7 @@ class CursesEapeakParsingEngine(EapeakParsingEngine):
 					messages.append((TAB_DEPTH_2, 'EAP Types: [ UNKNOWN ]'))
 				if client.identities:
 					messages.append((TAB_DEPTH_2, 'Identities:'))
-				for ident, eap in client.identities.items():
+				for ident, eap in list(client.identities.items()):
 					messages.append((TAB_DEPTH_3, '(' + EAP_TYPES[eap] + ') ' + ident))
 				if client.mschap:
 					first = True
@@ -952,7 +929,7 @@ class CursesEapeakParsingEngine(EapeakParsingEngine):
 				if client.wpsData:
 					the_cheese_stands_alone = True
 					for piece in ['Manufacturer', 'Model Name', 'Model Number', 'Device Name']:
-						if client.wpsData.has_key(piece):
+						if piece in client.wpsData:
 							if the_cheese_stands_alone:
 								messages.append((TAB_DEPTH_2, 'WPS Information:'))
 								the_cheese_stands_alone = False

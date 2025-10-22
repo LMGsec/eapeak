@@ -34,6 +34,7 @@ import base64
 import binascii
 import xml.sax.saxutils
 
+from scapy.layers.dot11 import Dot11
 from eapeak.scapylayers.l2 import eap_types as EAP_TYPES
 
 EAP_TYPES[0] = 'NONE'
@@ -68,7 +69,7 @@ class WirelessClient:
 		Adds identity strings with their associated EAP type that they
 		were discovered with.
 		"""
-		if not identity in self.identities.keys() and identity:
+		if not identity in list(self.identities.keys()) and identity:
 			self.identities[identity] = eaptype
 
 	def add_ms_chap_info(self, eaptype, challenge=None, response=None, identity=None):
@@ -115,12 +116,19 @@ class WirelessClient:
 		output += (tab * tabs) + 'Associated BSSID: ' + self.bssid + '\n'
 
 		if self.identities:
-			output += (tab * tabs) + 'Identities:\n' + (tab * (tabs + 1)) + ('\n' + (tab * (tabs + 1))).join(self.identities.keys()) + '\n'
+			# Python 3: decode bytes to strings
+			identities = []
+			for identity in self.identities.keys():
+				if isinstance(identity, bytes):
+					identities.append(identity.decode('utf-8', errors='ignore'))
+				else:
+					identities.append(str(identity))
+			output += (tab * tabs) + 'Identities:\n' + (tab * (tabs + 1)) + ('\n' + (tab * (tabs + 1))).join(identities) + '\n'	
 
 		if self.eapTypes:
 			output += (tab * tabs) + 'EAP Types:\n'
 			for eapType in self.eapTypes:
-				if eapType in EAP_TYPES.keys():
+				if eapType in list(EAP_TYPES.keys()):
 					output += (tab * (tabs + 1)) + EAP_TYPES[eapType] + '\n'
 				else:
 					output += (tab * (tabs + 1)) + 'EAP Type #' + str(eapType) + '\n'
@@ -140,7 +148,7 @@ class WirelessClient:
 		if self.wpsData:
 			output_control = True
 			for piece in ['Manufacturer', 'Model Name', 'Model Number', 'Device Name']:
-				if self.wpsData.has_key(piece):
+				if piece in self.wpsData:
 					if output_control:
 						output += (tab * tabs) + 'WPS Information:\n'
 						output_control = False
@@ -157,7 +165,7 @@ class WirelessClient:
 		ElementTree.SubElement(root, 'client-bssid').text = self.bssid
 		ElementTree.SubElement(root, 'eap-types').text = ",".join([str(i) for i in self.eapTypes])
 
-		for identity, eaptype in self.identities.items():
+		for identity, eaptype in list(self.identities.items()):
 			tmp = ElementTree.SubElement(root, 'identity')
 			tmp.set('eap-type', str(eaptype))
 			tmp.text = xml.sax.saxutils.escape(identity)
@@ -174,11 +182,11 @@ class WirelessClient:
 		if self.wpsData:
 			wps = ElementTree.SubElement(root, 'wps-data')
 			for info in ['manufacturer', 'model name', 'model number', 'device name']:
-				if self.wpsData.has_key(info):
+				if info in self.wpsData:
 					tmp = ElementTree.SubElement(wps, info.replace(' ', '-'))
 					tmp.text = self.wpsData[info]  # pylint: disable=unsubscriptable-object
 			for info in ['uuid', 'registrar nonce', 'enrollee nonce']:  # Values that should be base64 encoded
-				if self.wpsData.has_key(info):
+				if info in self.wpsData:
 					tmp = ElementTree.SubElement(wps, info.replace(' ', '-'))
 					tmp.set('encoding', 'base64')
 					tmp.text = base64.standard_b64encode(self.wpsData[info])  # pylint: disable=unsubscriptable-object
